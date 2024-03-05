@@ -6,6 +6,38 @@ pub trait Payload {
 
 pub struct Real {}
 
+/// Options for how the program should treat perceived errors in reading raw data.
+#[derive(Clone, Copy)]
+pub struct ReadMode(u32);
+
+impl ReadMode {
+    /// Error mode specifies that a function should fail when it encounters malformed data.
+    pub fn error() -> Self {
+        ReadMode(0)
+    }
+
+    /// Fix mode specifies that a function should try its best to rectify malformed data and
+    /// proceed if possible.
+    pub fn fix() -> Self {
+        ReadMode(1)
+    }
+
+    /// Ignore mode specifies that a function should proceed with creating an invalid representation
+    /// when malformed data is encountered.
+    pub unsafe fn ignore() -> Self {
+        ReadMode(2)
+    }
+}
+
+impl Default for ReadMode {
+    fn default() -> Self {
+        ReadMode::error()
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct VariableReadOptions;
+
 pub struct Variable<T: Payload> {
     payload: T,
 }
@@ -16,7 +48,18 @@ impl<T: Payload> Variable<T> {
     }
 }
 
-const FILE_SIGNATURE_LENGTH: usize = 0x0B;
+/// Error-handling options for reading in a file.
+/// 
+/// See [`ReadMode`] for the different modes.
+#[derive(Clone, Default)]
+pub struct FileReadOptions {
+    pub signature: ReadMode,
+    pub variable_length: ReadMode,
+    pub variable: VariableReadOptions,
+    pub checksum: ReadMode,
+}
+
+const FILE_SIGNATURE_SIZE: usize = 0x0B;
 const FILE_COMMENT_SIZE: usize = 0x2A;
 const FILE_VARIABLE_LENGTH_SIZE: usize = 0x02;
 const FILE_CHECKSUM_SIZE: usize = 0x02;
@@ -27,7 +70,7 @@ const FILE_CHECKSUM_SIZE: usize = 0x02;
 /// such as a signature, which identifies a file as TI-compatible, and an
 /// optional comment.
 pub struct File<T: Payload> {
-    signature: [u8; FILE_SIGNATURE_LENGTH],
+    signature: [u8; FILE_SIGNATURE_SIZE],
     comment: [u8; FILE_COMMENT_SIZE],
     variable_length: [u8; FILE_VARIABLE_LENGTH_SIZE],
     variable: Variable<T>,
@@ -36,7 +79,7 @@ pub struct File<T: Payload> {
 
 impl<T: Payload> File<T> {
     pub const SIGNATURE_OFFSET: usize = 0x00;
-    pub const SIGNATURE_SIZE: usize = FILE_SIGNATURE_LENGTH;
+    pub const SIGNATURE_SIZE: usize = FILE_SIGNATURE_SIZE;
     pub const COMMENT_OFFSET: usize = Self::SIGNATURE_OFFSET + Self::SIGNATURE_SIZE;
     pub const COMMENT_SIZE: usize = FILE_COMMENT_SIZE;
     pub const VARIABLE_LENGTH_OFFSET: usize = Self::COMMENT_OFFSET + Self::COMMENT_SIZE;
@@ -76,7 +119,7 @@ impl<T: Payload> File<T> {
     /// Gets the "signature," which identifies the data as usable on TI devices.
     ///
     /// This is always the string `**TI83F*` followed by the bytes `0x1A`, `0x0A`, and `0x00`.
-    pub fn signature(&self) -> &[u8] {
+    pub fn signature(&self) -> &[u8; FILE_SIGNATURE_SIZE] {
         &self.signature
     }
 
@@ -88,7 +131,7 @@ impl<T: Payload> File<T> {
     /// Calculator-generated data has an 11-byte signature consisting of `**TI83F*` followed by
     /// the bytes `0x1A`, `0x0A`, and `0x00`. Changing the signature to anything else risks
     /// making the data unusable.
-    pub unsafe fn signature_mut(&mut self) -> &mut [u8] {
+    pub unsafe fn signature_mut(&mut self) -> &mut [u8; FILE_SIGNATURE_SIZE] {
         &mut self.signature
     }
 
@@ -125,9 +168,8 @@ impl<T: Payload> File<T> {
         };
         let mut comment = String::from_utf8(comment.to_vec())?;
         if trim {
-            let whitespace_len = comment.trim_end_matches(' ').len();
-            let new_len = comment.len() - whitespace_len;
-            comment.truncate(new_len);
+            let trimmed_len = comment.trim_end_matches(' ').len();
+            comment.truncate(trimmed_len);
         }
         Ok(comment)
     }
@@ -137,10 +179,10 @@ impl<T: Payload> File<T> {
     /// Comments can be zero-terminated or padded to the right with spaces. This function
     /// ignores both when calculating the length.
     pub fn comment_length(&self) -> usize {
-        if let Some(null_char_position) = self.comment_null_terminator_position() {
-            return null_char_position;
+        match self.comment_null_terminator_position() {
+            Some(null_char_position) => null_char_position,
+            None => Self::COMMENT_SIZE - self.comment_ending_spaces(),
         }
-        Self::COMMENT_SIZE - self.comment_ending_spaces()
     }
 
     /// Gets whether the comment data is zero-terminated (`true`) or padded (`false`).
@@ -208,14 +250,14 @@ impl<T: Payload> File<T> {
     /// Gets the raw data from the region reserved for a comment.
     ///
     /// The comment is either zero-terminated or padded with spaces.
-    pub fn comment_raw(&self) -> &[u8] {
+    pub fn comment_raw(&self) -> &[u8; FILE_COMMENT_SIZE] {
         &self.comment
     }
 
     /// Gets the raw data from the region reserved for a comment for mutation.
     ///
     /// Changing the comment is safe; the calculator never reads it.
-    pub fn comment_raw_mut(&mut self) -> &mut [u8] {
+    pub fn comment_raw_mut(&mut self) -> &mut [u8; FILE_COMMENT_SIZE] {
         &mut self.comment
     }
 
@@ -228,7 +270,7 @@ impl<T: Payload> File<T> {
     /// of data.
     ///
     /// The length is stored as a little-endian integer.
-    pub fn variable_length_raw(&self) -> &[u8] {
+    pub fn variable_length_raw(&self) -> &[u8; FILE_VARIABLE_LENGTH_SIZE] {
         &self.variable_length
     }
 
@@ -239,7 +281,7 @@ impl<T: Payload> File<T> {
     ///
     /// The bytes must represent a little-endian integer that matches the length
     /// in bytes of the variable section of the data.
-    pub unsafe fn variable_length_raw_mut(&mut self) -> &mut [u8] {
+    pub unsafe fn variable_length_raw_mut(&mut self) -> &mut [u8; FILE_VARIABLE_LENGTH_SIZE] {
         &mut self.variable_length
     }
 
@@ -272,7 +314,7 @@ impl<T: Payload> File<T> {
     ///
     /// The checksum equals the lower 16 bits of the sum of the bytes in the variable section
     /// of the data. The data is stored as a little-endian integer.
-    pub fn checksum_raw(&self) -> &[u8] {
+    pub fn checksum_raw(&self) -> &[u8; FILE_CHECKSUM_SIZE] {
         &self.checksum
     }
 
@@ -280,7 +322,7 @@ impl<T: Payload> File<T> {
     ///
     /// This must equal the lower 16 bits of the sum of the bytes in the variable section
     /// of the data. The data is stored as a little-endian integer.
-    pub unsafe fn checksum_raw_mut(&mut self) -> &mut [u8] {
+    pub unsafe fn checksum_raw_mut(&mut self) -> &mut [u8; FILE_CHECKSUM_SIZE] {
         &mut self.checksum
     }
 }
