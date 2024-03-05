@@ -21,6 +21,11 @@ const FILE_COMMENT_SIZE: usize = 0x2A;
 const FILE_VARIABLE_LENGTH_SIZE: usize = 0x02;
 const FILE_CHECKSUM_SIZE: usize = 0x02;
 
+/// Data representation of a file exported from a TI calculator.
+///
+/// Files are wrappers around variables and other data, and they include metadata
+/// such as a signature, which identifies a file as TI-compatible, and an
+/// optional comment.
 pub struct File<T: Payload> {
     signature: [u8; FILE_SIGNATURE_LENGTH],
     comment: [u8; FILE_COMMENT_SIZE],
@@ -29,11 +34,6 @@ pub struct File<T: Payload> {
     checksum: [u8; FILE_CHECKSUM_SIZE],
 }
 
-/// Data representation of a file exported from a TI calculator.
-/// 
-/// Files are wrappers around variables and other data, and they include metadata
-/// such as a signature, which identifies a file as TI-compatible, and an
-/// optional comment.
 impl<T: Payload> File<T> {
     pub const SIGNATURE_OFFSET: usize = 0x00;
     pub const SIGNATURE_SIZE: usize = FILE_SIGNATURE_LENGTH;
@@ -41,7 +41,8 @@ impl<T: Payload> File<T> {
     pub const COMMENT_SIZE: usize = FILE_COMMENT_SIZE;
     pub const VARIABLE_LENGTH_OFFSET: usize = Self::COMMENT_OFFSET + Self::COMMENT_SIZE;
     pub const VARIABLE_LENGTH_SIZE: usize = FILE_VARIABLE_LENGTH_SIZE;
-    pub const HEADER_SIZE: usize = Self::COMMENT_SIZE;
+    pub const HEADER_SIZE: usize =
+        Self::SIGNATURE_SIZE + Self::COMMENT_SIZE + Self::VARIABLE_LENGTH_SIZE;
     pub const VARIABLE_OFFSET: usize = Self::VARIABLE_LENGTH_OFFSET + Self::VARIABLE_LENGTH_SIZE;
     pub const CHECKSUM_SIZE: usize = FILE_CHECKSUM_SIZE;
 
